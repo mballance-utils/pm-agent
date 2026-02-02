@@ -133,24 +133,9 @@ jobs:
           EOFREPORT
           
           echo "Report created: updates/${YEAR}/${WEEK}.md"
-      
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Add weekly update for ${{ inputs.project_name }} - Week ${{ github.run_number }}"
-          branch: weekly-update-${{ github.run_number }}
-          title: "Weekly Update: ${{ inputs.project_name }} - $(date +%Y) Week $(date +%U)"
-          body: |
-            Automated weekly summary for **${{ inputs.project_name }}**
-            
-            - **Year:** $(date +%Y)
-            - **Week:** $(date +%U)
-            - **Generated:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-            
-            This report was automatically generated based on project activity using GitHub Models API.
-          add-paths: |
-            updates/**/*.md
+          
+          # Also save to job summary for easy viewing
+          cat updates/${YEAR}/${WEEK}.md >> $GITHUB_STEP_SUMMARY
       
       - name: Upload summary
         uses: actions/upload-artifact@v4
