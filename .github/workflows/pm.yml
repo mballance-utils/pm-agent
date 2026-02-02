@@ -41,14 +41,14 @@ on:
         required: false
         type: string
         default: 'main'
-    secrets:
-      COPILOT_TOKEN:
-        description: 'GitHub token with Copilot access'
-        required: true
 
 jobs:
   generate-summary:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      models: read
     
     steps:
       - name: Setup workspace
@@ -81,77 +81,52 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      
-      - name: Install GitHub Copilot CLI
-        run: |
-          npm install -g @github/copilot
-          
-          # Verify installation
-          copilot --version
-      
-      - name: Authenticate Copilot CLI
-        run: |
-          # Authenticate gh CLI for repo cloning
-          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
-          gh auth status
-      
-      - name: Run Copilot CLI Weekly Summary
+      - name: Gather project context
+        id: context
         run: |
           cd projects
           
-          # Create the prompt with absolute path to weekly.md
-          PROMPT_FILE="${GITHUB_WORKSPACE}/prompts/weekly.md"
+          # Collect recent commit information
+          CONTEXT=""
+          for dir in */; do
+            if [ -d "$dir/.git" ]; then
+              echo "Processing $dir"
+              cd "$dir"
+              REPO_NAME=$(basename "$dir")
+              COMMITS=$(git log --since="7 days ago" --pretty=format:"- %h %s (%an, %ar)" --no-merges | head -20)
+              if [ -n "$COMMITS" ]; then
+                CONTEXT="$CONTEXT\n\n## Repository: $REPO_NAME\n\nRecent commits:\n$COMMITS"
+              fi
+              cd ..
+            fi
+          done
           
-          echo "Running weekly summary for ${{ inputs.project_name }}"
-          echo "Prompt file: $PROMPT_FILE"
+          # Save context to file
+          echo -e "$CONTEXT" > ${GITHUB_WORKSPACE}/project_context.txt
+          echo "Context gathered for ${{ inputs.project_name }}"
           
-          # Debug: Check if env vars are set
-          echo "Checking authentication environment..."
-          env | grep -E "(GITHUB_TOKEN|GH_TOKEN|COPILOT)" | sed 's/=.*/=***/'
-          
-          # Export env vars explicitly for child processes
-          export GITHUB_TOKEN="${{ secrets.COPILOT_TOKEN }}"
-          export GH_TOKEN="${{ secrets.COPILOT_TOKEN }}"
-          export COPILOT_GITHUB_TOKEN="${{ secrets.COPILOT_TOKEN }}"
-          
-          # Read the prompt content
-          if [ -f "$PROMPT_FILE" ]; then
-            PROMPT_CONTENT=$(cat "$PROMPT_FILE")
-            # Run standalone copilot CLI with the prompt in non-interactive mode
-            copilot -p "Create a weekly summary for ${{ inputs.project_name }} based on these instructions: $PROMPT_CONTENT"
-          else
-            echo "Prompt file not found: $PROMPT_FILE"
-            exit 1
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+      - name: Run AI Weekly Summary
+        id: ai_summary
+        uses: actions/ai-inference@v1
+        with:
+          model: 'openai/gpt-4o'
+          prompt-file: 'prompts/weekly.md'
+          input: |
+            project_name: ${{ inputs.project_name }}
+            project_context: ${{ github.workspace }}/project_context.txt
       
-      - name: Organize weekly report
+      - name: Save AI summary to file
         run: |
           # Get current year and week number
           YEAR=$(date +%Y)
           WEEK=$(date +%U)
           
-          # Find the weekly_report.md file
-          REPORT=$(find projects -name "weekly_report.md" -type f | head -n 1)
+          # Create updates directory structure
+          mkdir -p updates/${YEAR}
           
-          if [ -n "$REPORT" ]; then
-            # Create updates directory structure
-            mkdir -p updates/${YEAR}
-            
-            # Copy report to structured location
-            cp "$REPORT" updates/${YEAR}/${WEEK}.md
-            echo "Report organized: updates/${YEAR}/${WEEK}.md"
-          else
-            echo "No weekly_report.md found"
-            exit 1
-          fi
+          # Save the AI response to the weekly report
+          echo "${{ steps.ai_summary.outputs.response }}" > updates/${YEAR}/${WEEK}.md
+          echo "Report created: updates/${YEAR}/${WEEK}.md"
       
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
@@ -167,7 +142,7 @@ jobs:
             - **Week:** $(date +%U)
             - **Generated:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
             
-            This report was automatically generated based on project activity.
+            This report was automatically generated based on project activity using GitHub Models API.
           add-paths: |
             updates/**/*.md
       
@@ -176,8 +151,5 @@ jobs:
         if: always()
         with:
           name: weekly-summary-${{ inputs.project_name }}
-          path: |
-            updates/**/*.md
-            projects/**/weekly_report.md
-            projects/**/summary*.md
+          path: updates/**/*.md
           if-no-files-found: warn
