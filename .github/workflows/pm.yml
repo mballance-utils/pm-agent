@@ -120,6 +120,8 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
       
       - name: Organize weekly report
         run: |
