@@ -109,7 +109,7 @@ jobs:
         id: ai_summary
         uses: actions/ai-inference@v1
         with:
-          model: 'openai/gpt-4o'
+          model: 'anthropic/claude-sonnet-4.5'
           prompt-file: 'prompts/weekly.md'
           input: |
             project_name: ${{ inputs.project_name }}
