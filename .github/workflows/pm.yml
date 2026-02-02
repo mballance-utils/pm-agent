@@ -41,6 +41,10 @@ on:
         required: false
         type: string
         default: 'main'
+    secrets:
+      COPILOT_TOKEN:
+        description: 'GitHub token with Copilot access'
+        required: true
 
 jobs:
   generate-summary:
@@ -110,9 +114,9 @@ jobs:
             exit 1
           fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          COPILOT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
       
       - name: Organize weekly report
         run: |
