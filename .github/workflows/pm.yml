@@ -1,0 +1,137 @@
+name: Weekly Project Summary
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_name:
+        description: 'Project name'
+        required: true
+        type: string
+      project_urls:
+        description: 'Project repository URLs (comma-separated)'
+        required: true
+        type: string
+      prompt_repo:
+        description: 'Repository containing prompts (format: owner/repo)'
+        required: false
+        type: string
+        default: 'mballance/mballance-utils'
+      prompt_ref:
+        description: 'Branch/tag/commit of prompt repository'
+        required: false
+        type: string
+        default: 'main'
+
+jobs:
+  generate-summary:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Setup workspace
+        run: |
+          mkdir -p projects
+          mkdir -p prompts
+      
+      - name: Checkout prompt repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.prompt_repo }}
+          ref: ${{ inputs.prompt_ref }}
+          path: prompts-repo
+      
+      - name: Copy prompts
+        run: |
+          cp -r prompts-repo/prompts/* prompts/
+          ls -la prompts/
+      
+      - name: Clone project repositories
+        run: |
+          cd projects
+          IFS=',' read -ra URLS <<< "${{ inputs.project_urls }}"
+          for url in "${URLS[@]}"; do
+            url=$(echo "$url" | xargs)  # trim whitespace
+            echo "Cloning $url"
+            git clone "$url"
+          done
+          ls -la
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Install GitHub Copilot CLI
+        run: |
+          # Install gh CLI if not present
+          type -p gh >/dev/null || {
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+          }
+          
+          # Install Copilot CLI extension
+          gh extension install github/gh-copilot || true
+      
+      - name: Run Copilot CLI Weekly Summary
+        run: |
+          cd projects
+          
+          # Create the prompt with absolute path to weekly.md
+          PROMPT_FILE="${GITHUB_WORKSPACE}/prompts/weekly.md"
+          
+          echo "Running weekly summary for ${{ inputs.project_name }}"
+          echo "Prompt file: $PROMPT_FILE"
+          
+          # Run copilot with the prompt
+          gh copilot suggest "Create a weekly summary for ${{ inputs.project_name }} based on instructions in $PROMPT_FILE" || \
+            gh copilot "Create a weekly summary for ${{ inputs.project_name }} based on instructions in $PROMPT_FILE"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Organize weekly report
+        run: |
+          # Get current year and week number
+          YEAR=$(date +%Y)
+          WEEK=$(date +%U)
+          
+          # Find the weekly_report.md file
+          REPORT=$(find projects -name "weekly_report.md" -type f | head -n 1)
+          
+          if [ -n "$REPORT" ]; then
+            # Create updates directory structure
+            mkdir -p updates/${YEAR}
+            
+            # Copy report to structured location
+            cp "$REPORT" updates/${YEAR}/${WEEK}.md
+            echo "Report organized: updates/${YEAR}/${WEEK}.md"
+          else
+            echo "No weekly_report.md found"
+            exit 1
+          fi
+      
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Add weekly update for ${{ inputs.project_name }} - Week ${{ github.run_number }}"
+          branch: weekly-update-${{ github.run_number }}
+          title: "Weekly Update: ${{ inputs.project_name }} - $(date +%Y) Week $(date +%U)"
+          body: |
+            Automated weekly summary for **${{ inputs.project_name }}**
+            
+            - **Year:** $(date +%Y)
+            - **Week:** $(date +%U)
+            - **Generated:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+            
+            This report was automatically generated based on project activity.
+          add-paths: |
+            updates/**/*.md
+      
+      - name: Upload summary
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-summary-${{ inputs.project_name }}
+          path: |
+            updates/**/*.md
+            projects/**/weekly_report.md
+            projects/**/summary*.md
+          if-no-files-found: warn
