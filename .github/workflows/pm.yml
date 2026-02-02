@@ -97,11 +97,8 @@ jobs:
           # Verify authentication
           gh auth status
           
-          # Install Copilot CLI extension
-          gh extension install github/gh-copilot || true
-          
-          # Verify copilot extension
-          gh extension list
+          # Check if copilot is available (built-in or extension)
+          gh copilot --help || gh extension install github/gh-copilot
       
       - name: Run Copilot CLI Weekly Summary
         run: |
