@@ -51,6 +51,9 @@ jobs:
       models: read
     
     steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+      
       - name: Setup workspace
         run: |
           mkdir -p projects
