@@ -100,9 +100,15 @@ jobs:
           echo "Running weekly summary for ${{ inputs.project_name }}"
           echo "Prompt file: $PROMPT_FILE"
           
-          # Run copilot with the prompt
-          gh copilot suggest "Create a weekly summary for ${{ inputs.project_name }} based on instructions in $PROMPT_FILE" || \
-            gh copilot "Create a weekly summary for ${{ inputs.project_name }} based on instructions in $PROMPT_FILE"
+          # Read the prompt content
+          if [ -f "$PROMPT_FILE" ]; then
+            PROMPT_CONTENT=$(cat "$PROMPT_FILE")
+            # Run copilot with the prompt in non-interactive mode
+            gh copilot -p "Create a weekly summary for ${{ inputs.project_name }} based on these instructions: $PROMPT_CONTENT"
+          else
+            echo "Prompt file not found: $PROMPT_FILE"
+            exit 1
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
