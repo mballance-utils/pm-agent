@@ -81,24 +81,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      
       - name: Install GitHub Copilot CLI
         run: |
-          # Install gh CLI if not present
-          type -p gh >/dev/null || {
-            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-            sudo apt update
-            sudo apt install gh -y
-          }
+          npm install -g @github/copilot
           
-          # Authenticate gh CLI with the token
-          echo "${{ secrets.COPILOT_TOKEN }}" | gh auth login --with-token
-          
-          # Verify authentication
+          # Verify installation
+          copilot --version
+      
+      - name: Authenticate Copilot CLI
+        run: |
+          # Authenticate gh CLI for repo cloning
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
           gh auth status
-          
-          # Check if copilot is available (built-in or extension)
-          gh copilot --help || gh extension install github/gh-copilot
       
       - name: Run Copilot CLI Weekly Summary
         run: |
@@ -113,16 +112,14 @@ jobs:
           # Read the prompt content
           if [ -f "$PROMPT_FILE" ]; then
             PROMPT_CONTENT=$(cat "$PROMPT_FILE")
-            # Run copilot with the prompt in non-interactive mode
-            gh copilot -p "Create a weekly summary for ${{ inputs.project_name }} based on these instructions: $PROMPT_CONTENT"
+            # Run standalone copilot CLI with the prompt in non-interactive mode
+            copilot -p "Create a weekly summary for ${{ inputs.project_name }} based on these instructions: $PROMPT_CONTENT"
           else
             echo "Prompt file not found: $PROMPT_FILE"
             exit 1
           fi
         env:
-          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_TOKEN }}
       
       - name: Organize weekly report
         run: |
