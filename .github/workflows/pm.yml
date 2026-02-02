@@ -94,8 +94,14 @@ jobs:
           # Authenticate gh CLI with the token
           echo "${{ secrets.COPILOT_TOKEN }}" | gh auth login --with-token
           
+          # Verify authentication
+          gh auth status
+          
           # Install Copilot CLI extension
           gh extension install github/gh-copilot || true
+          
+          # Verify copilot extension
+          gh extension list
       
       - name: Run Copilot CLI Weekly Summary
         run: |
