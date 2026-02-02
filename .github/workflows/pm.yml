@@ -127,8 +127,11 @@ jobs:
           # Create updates directory structure
           mkdir -p updates/${YEAR}
           
-          # Save the AI response to the weekly report
-          echo "${{ steps.ai_summary.outputs.response }}" > updates/${YEAR}/${WEEK}.md
+          # Save the AI response to the weekly report using cat with heredoc
+          cat > updates/${YEAR}/${WEEK}.md << 'EOFREPORT'
+          ${{ steps.ai_summary.outputs.response }}
+          EOFREPORT
+          
           echo "Report created: updates/${YEAR}/${WEEK}.md"
       
       - name: Create Pull Request
