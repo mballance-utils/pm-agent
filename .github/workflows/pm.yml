@@ -15,7 +15,27 @@ on:
         description: 'Repository containing prompts (format: owner/repo)'
         required: false
         type: string
-        default: 'mballance/mballance-utils'
+        default: 'mballance-utils/pm-agent'
+      prompt_ref:
+        description: 'Branch/tag/commit of prompt repository'
+        required: false
+        type: string
+        default: 'main'
+  workflow_call:
+    inputs:
+      project_name:
+        description: 'Project name'
+        required: true
+        type: string
+      project_urls:
+        description: 'Project repository URLs (comma-separated)'
+        required: true
+        type: string
+      prompt_repo:
+        description: 'Repository containing prompts (format: owner/repo)'
+        required: false
+        type: string
+        default: 'mballance-utils/pm-agent'
       prompt_ref:
         description: 'Branch/tag/commit of prompt repository'
         required: false
