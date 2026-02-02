@@ -109,6 +109,15 @@ jobs:
           echo "Running weekly summary for ${{ inputs.project_name }}"
           echo "Prompt file: $PROMPT_FILE"
           
+          # Debug: Check if env vars are set
+          echo "Checking authentication environment..."
+          env | grep -E "(GITHUB_TOKEN|GH_TOKEN|COPILOT)" | sed 's/=.*/=***/'
+          
+          # Export env vars explicitly for child processes
+          export GITHUB_TOKEN="${{ secrets.COPILOT_TOKEN }}"
+          export GH_TOKEN="${{ secrets.COPILOT_TOKEN }}"
+          export COPILOT_GITHUB_TOKEN="${{ secrets.COPILOT_TOKEN }}"
+          
           # Read the prompt content
           if [ -f "$PROMPT_FILE" ]; then
             PROMPT_CONTENT=$(cat "$PROMPT_FILE")
