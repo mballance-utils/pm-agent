@@ -47,7 +47,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
+      pull-requests: read
+      issues: read
       models: read
     
     steps:
@@ -89,24 +90,81 @@ jobs:
         run: |
           cd projects
           
-          # Collect recent commit information
-          CONTEXT=""
+          # Get date 7 days ago
+          SINCE_DATE=$(date -d '7 days ago' +%Y-%m-%d)
+          
+          # Collect comprehensive project information
+          CONTEXT_FILE="${GITHUB_WORKSPACE}/project_context.txt"
+          > "$CONTEXT_FILE"  # Clear file
+          
+          echo "# Project: ${{ inputs.project_name }}" >> "$CONTEXT_FILE"
+          echo "Report Date: $(date +%Y-%m-%d)" >> "$CONTEXT_FILE"
+          echo "Period: Last 7 days (since $SINCE_DATE)" >> "$CONTEXT_FILE"
+          echo "" >> "$CONTEXT_FILE"
+          
           for dir in */; do
             if [ -d "$dir/.git" ]; then
               echo "Processing $dir"
               cd "$dir"
               REPO_NAME=$(basename "$dir")
-              COMMITS=$(git log --since="7 days ago" --pretty=format:"- %h %s (%an, %ar)" --no-merges | head -20)
+              REPO_URL=$(git config --get remote.origin.url)
+              
+              echo "## Repository: $REPO_NAME" >> "$CONTEXT_FILE"
+              echo "URL: $REPO_URL" >> "$CONTEXT_FILE"
+              echo "" >> "$CONTEXT_FILE"
+              
+              # Recent commits
+              echo "### Recent Commits" >> "$CONTEXT_FILE"
+              COMMITS=$(git log --since="$SINCE_DATE" --pretty=format:"- %h %s (%an, %ar)" --no-merges | head -20)
               if [ -n "$COMMITS" ]; then
-                CONTEXT="$CONTEXT\n\n## Repository: $REPO_NAME\n\nRecent commits:\n$COMMITS"
+                echo "$COMMITS" >> "$CONTEXT_FILE"
+              else
+                echo "No commits in the last 7 days" >> "$CONTEXT_FILE"
               fi
+              echo "" >> "$CONTEXT_FILE"
+              
+              # Get org and repo name for gh commands
+              if [[ "$REPO_URL" =~ github\.com[:/]([^/]+)/([^/.]+) ]]; then
+                ORG="${BASH_REMATCH[1]}"
+                REPO="${BASH_REMATCH[2]}"
+                
+                echo "### Issues (Last 7 Days)" >> "$CONTEXT_FILE"
+                
+                # New issues
+                echo "#### Opened Issues:" >> "$CONTEXT_FILE"
+                gh issue list --repo "$ORG/$REPO" --state all --search "created:>=$SINCE_DATE" --limit 50 --json number,title,state,createdAt,author | \
+                  jq -r '.[] | "- #\(.number): \(.title) [\(.state)] (by @\(.author.login), \(.createdAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch issues" >> "$CONTEXT_FILE"
+                echo "" >> "$CONTEXT_FILE"
+                
+                # Closed issues
+                echo "#### Closed Issues:" >> "$CONTEXT_FILE"
+                gh issue list --repo "$ORG/$REPO" --state closed --search "closed:>=$SINCE_DATE" --limit 50 --json number,title,closedAt,author | \
+                  jq -r '.[] | "- #\(.number): \(.title) (by @\(.author.login), closed \(.closedAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch closed issues" >> "$CONTEXT_FILE"
+                echo "" >> "$CONTEXT_FILE"
+                
+                echo "### Pull Requests (Last 7 Days)" >> "$CONTEXT_FILE"
+                
+                # New PRs
+                echo "#### Opened PRs:" >> "$CONTEXT_FILE"
+                gh pr list --repo "$ORG/$REPO" --state all --search "created:>=$SINCE_DATE" --limit 50 --json number,title,state,createdAt,author | \
+                  jq -r '.[] | "- #\(.number): \(.title) [\(.state)] (by @\(.author.login), \(.createdAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch PRs" >> "$CONTEXT_FILE"
+                echo "" >> "$CONTEXT_FILE"
+                
+                # Merged PRs
+                echo "#### Merged PRs:" >> "$CONTEXT_FILE"
+                gh pr list --repo "$ORG/$REPO" --state merged --search "merged:>=$SINCE_DATE" --limit 50 --json number,title,mergedAt,author | \
+                  jq -r '.[] | "- #\(.number): \(.title) (by @\(.author.login), merged \(.mergedAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch merged PRs" >> "$CONTEXT_FILE"
+                echo "" >> "$CONTEXT_FILE"
+              fi
+              
               cd ..
             fi
           done
           
-          # Save context to file
-          echo -e "$CONTEXT" > ${GITHUB_WORKSPACE}/project_context.txt
           echo "Context gathered for ${{ inputs.project_name }}"
+          echo "Context file size: $(wc -l < $CONTEXT_FILE) lines"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
       - name: Run AI Weekly Summary
         id: ai_summary
@@ -116,7 +174,22 @@ jobs:
           prompt-file: 'prompts/weekly.md'
           input: |
             project_name: ${{ inputs.project_name }}
-            project_context: ${{ github.workspace }}/project_context.txt
+            working_dir: ${{ github.workspace }}/projects
+            
+            Project data has been gathered and is available in the working directory.
+            Each repository has been cloned with full context including:
+            - Recent commits from the last 7 days
+            - Issues opened and closed in the last 7 days  
+            - Pull requests opened and merged in the last 7 days
+            
+            Full details are in: ${{ github.workspace }}/project_context.txt
+            
+            You have access to:
+            - gh CLI tool for querying GitHub data
+            - All cloned repositories in the projects/ directory
+            - The project_context.txt file with pre-gathered data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Save AI summary to file
         run: |
