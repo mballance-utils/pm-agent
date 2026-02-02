@@ -11,6 +11,11 @@ on:
         description: 'Project repository URLs (comma-separated)'
         required: true
         type: string
+      model:
+        description: 'AI model to use'
+        required: false
+        type: string
+        default: 'gpt-4o'
       prompt_repo:
         description: 'Repository containing prompts (format: owner/repo)'
         required: false
@@ -31,6 +36,11 @@ on:
         description: 'Project repository URLs (comma-separated)'
         required: true
         type: string
+      model:
+        description: 'AI model to use'
+        required: false
+        type: string
+        default: 'gpt-4o'
       prompt_repo:
         description: 'Repository containing prompts (format: owner/repo)'
         required: false
@@ -41,6 +51,10 @@ on:
         required: false
         type: string
         default: 'main'
+    secrets:
+      OPENAI_API_KEY:
+        description: 'OpenAI API key (optional, will use GitHub Models if not provided)'
+        required: false
 
 jobs:
   generate-summary:
@@ -49,16 +63,25 @@ jobs:
       contents: write
       pull-requests: read
       issues: read
-      models: read
     
     steps:
       - name: Checkout current repository
         uses: actions/checkout@v4
       
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install openai
+          
       - name: Setup workspace
         run: |
           mkdir -p projects
           mkdir -p prompts
+          mkdir -p scripts
       
       - name: Checkout prompt repository
         uses: actions/checkout@v4
@@ -67,10 +90,13 @@ jobs:
           ref: ${{ inputs.prompt_ref }}
           path: prompts-repo
       
-      - name: Copy prompts
+      - name: Copy prompts and scripts
         run: |
           cp -r prompts-repo/prompts/* prompts/
+          cp -r prompts-repo/scripts/* scripts/
+          chmod +x scripts/*.py
           ls -la prompts/
+          ls -la scripts/
       
       - name: Clone project repositories
         run: |
@@ -79,13 +105,14 @@ jobs:
           for url in "${URLS[@]}"; do
             url=$(echo "$url" | xargs)  # trim whitespace
             echo "Cloning $url"
-            git clone "$url"
+            git clone "$url" 2>&1 | head -5
           done
+          echo "Cloned repositories:"
           ls -la
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Gather project context
+      - name: Gather comprehensive project data
         id: context
         run: |
           cd projects
@@ -99,25 +126,43 @@ jobs:
           
           echo "# Project: ${{ inputs.project_name }}" >> "$CONTEXT_FILE"
           echo "Report Date: $(date +%Y-%m-%d)" >> "$CONTEXT_FILE"
+          echo "Report Week: $(date +%U)" >> "$CONTEXT_FILE"
           echo "Period: Last 7 days (since $SINCE_DATE)" >> "$CONTEXT_FILE"
           echo "" >> "$CONTEXT_FILE"
           
+          REPO_COUNT=0
+          TOTAL_COMMITS=0
+          TOTAL_ISSUES=0
+          TOTAL_PRS=0
+          
           for dir in */; do
             if [ -d "$dir/.git" ]; then
+              REPO_COUNT=$((REPO_COUNT + 1))
               echo "Processing $dir"
               cd "$dir"
               REPO_NAME=$(basename "$dir")
               REPO_URL=$(git config --get remote.origin.url)
               
+              echo "======================================" >> "$CONTEXT_FILE"
               echo "## Repository: $REPO_NAME" >> "$CONTEXT_FILE"
               echo "URL: $REPO_URL" >> "$CONTEXT_FILE"
               echo "" >> "$CONTEXT_FILE"
               
+              # Repository overview
+              echo "### Repository Overview" >> "$CONTEXT_FILE"
+              BRANCH=$(git branch --show-current)
+              LAST_COMMIT=$(git log -1 --pretty=format:"%h - %s (%an, %ar)" 2>/dev/null || echo "No commits")
+              echo "- Current branch: $BRANCH" >> "$CONTEXT_FILE"
+              echo "- Last commit: $LAST_COMMIT" >> "$CONTEXT_FILE"
+              echo "" >> "$CONTEXT_FILE"
+              
               # Recent commits
-              echo "### Recent Commits" >> "$CONTEXT_FILE"
-              COMMITS=$(git log --since="$SINCE_DATE" --pretty=format:"- %h %s (%an, %ar)" --no-merges | head -20)
+              echo "### Recent Commits (Last 7 Days)" >> "$CONTEXT_FILE"
+              COMMITS=$(git log --since="$SINCE_DATE" --pretty=format:"- [%h] %s (%an, %ar)" --no-merges | head -30)
               if [ -n "$COMMITS" ]; then
                 echo "$COMMITS" >> "$CONTEXT_FILE"
+                COMMIT_COUNT=$(echo "$COMMITS" | wc -l)
+                TOTAL_COMMITS=$((TOTAL_COMMITS + COMMIT_COUNT))
               else
                 echo "No commits in the last 7 days" >> "$CONTEXT_FILE"
               fi
@@ -130,68 +175,90 @@ jobs:
                 
                 echo "### Issues (Last 7 Days)" >> "$CONTEXT_FILE"
                 
-                # New issues
+                # Opened issues
                 echo "#### Opened Issues:" >> "$CONTEXT_FILE"
-                gh issue list --repo "$ORG/$REPO" --state all --search "created:>=$SINCE_DATE" --limit 50 --json number,title,state,createdAt,author | \
-                  jq -r '.[] | "- #\(.number): \(.title) [\(.state)] (by @\(.author.login), \(.createdAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch issues" >> "$CONTEXT_FILE"
+                ISSUES_OUTPUT=$(gh issue list --repo "$ORG/$REPO" --state all --search "created:>=$SINCE_DATE" --limit 50 --json number,title,state,createdAt,author,labels 2>/dev/null | \
+                  jq -r '.[] | "- [#\(.number)] \(.title) [\(.state)] (by @\(.author.login), \(.createdAt | fromdate | strftime("%Y-%m-%d"))) Labels: \(.labels | map(.name) | join(", "))"' 2>/dev/null || echo "")
+                if [ -n "$ISSUES_OUTPUT" ]; then
+                  echo "$ISSUES_OUTPUT" >> "$CONTEXT_FILE"
+                  ISSUE_COUNT=$(echo "$ISSUES_OUTPUT" | wc -l)
+                  TOTAL_ISSUES=$((TOTAL_ISSUES + ISSUE_COUNT))
+                else
+                  echo "  No new issues" >> "$CONTEXT_FILE"
+                fi
                 echo "" >> "$CONTEXT_FILE"
                 
                 # Closed issues
                 echo "#### Closed Issues:" >> "$CONTEXT_FILE"
-                gh issue list --repo "$ORG/$REPO" --state closed --search "closed:>=$SINCE_DATE" --limit 50 --json number,title,closedAt,author | \
-                  jq -r '.[] | "- #\(.number): \(.title) (by @\(.author.login), closed \(.closedAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch closed issues" >> "$CONTEXT_FILE"
+                CLOSED_OUTPUT=$(gh issue list --repo "$ORG/$REPO" --state closed --search "closed:>=$SINCE_DATE" --limit 50 --json number,title,closedAt,author,labels 2>/dev/null | \
+                  jq -r '.[] | "- [#\(.number)] \(.title) (by @\(.author.login), closed \(.closedAt | fromdate | strftime("%Y-%m-%d"))) Labels: \(.labels | map(.name) | join(", "))"' 2>/dev/null || echo "")
+                if [ -n "$CLOSED_OUTPUT" ]; then
+                  echo "$CLOSED_OUTPUT" >> "$CONTEXT_FILE"
+                else
+                  echo "  No closed issues" >> "$CONTEXT_FILE"
+                fi
                 echo "" >> "$CONTEXT_FILE"
                 
                 echo "### Pull Requests (Last 7 Days)" >> "$CONTEXT_FILE"
                 
-                # New PRs
+                # Opened PRs
                 echo "#### Opened PRs:" >> "$CONTEXT_FILE"
-                gh pr list --repo "$ORG/$REPO" --state all --search "created:>=$SINCE_DATE" --limit 50 --json number,title,state,createdAt,author | \
-                  jq -r '.[] | "- #\(.number): \(.title) [\(.state)] (by @\(.author.login), \(.createdAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch PRs" >> "$CONTEXT_FILE"
+                PRS_OUTPUT=$(gh pr list --repo "$ORG/$REPO" --state all --search "created:>=$SINCE_DATE" --limit 50 --json number,title,state,createdAt,author,labels 2>/dev/null | \
+                  jq -r '.[] | "- [#\(.number)] \(.title) [\(.state)] (by @\(.author.login), \(.createdAt | fromdate | strftime("%Y-%m-%d"))) Labels: \(.labels | map(.name) | join(", "))"' 2>/dev/null || echo "")
+                if [ -n "$PRS_OUTPUT" ]; then
+                  echo "$PRS_OUTPUT" >> "$CONTEXT_FILE"
+                  PR_COUNT=$(echo "$PRS_OUTPUT" | wc -l)
+                  TOTAL_PRS=$((TOTAL_PRS + PR_COUNT))
+                else
+                  echo "  No new PRs" >> "$CONTEXT_FILE"
+                fi
                 echo "" >> "$CONTEXT_FILE"
                 
                 # Merged PRs
                 echo "#### Merged PRs:" >> "$CONTEXT_FILE"
-                gh pr list --repo "$ORG/$REPO" --state merged --search "merged:>=$SINCE_DATE" --limit 50 --json number,title,mergedAt,author | \
-                  jq -r '.[] | "- #\(.number): \(.title) (by @\(.author.login), merged \(.mergedAt | fromdate | strftime("%Y-%m-%d")))"' >> "$CONTEXT_FILE" || echo "Unable to fetch merged PRs" >> "$CONTEXT_FILE"
+                MERGED_OUTPUT=$(gh pr list --repo "$ORG/$REPO" --state merged --search "merged:>=$SINCE_DATE" --limit 50 --json number,title,mergedAt,author,labels 2>/dev/null | \
+                  jq -r '.[] | "- [#\(.number)] \(.title) (by @\(.author.login), merged \(.mergedAt | fromdate | strftime("%Y-%m-%d"))) Labels: \(.labels | map(.name) | join(", "))"' 2>/dev/null || echo "")
+                if [ -n "$MERGED_OUTPUT" ]; then
+                  echo "$MERGED_OUTPUT" >> "$CONTEXT_FILE"
+                else
+                  echo "  No merged PRs" >> "$CONTEXT_FILE"
+                fi
                 echo "" >> "$CONTEXT_FILE"
+                
+                # Check for strategy documents
+                if [ -d "strategy" ]; then
+                  echo "### Strategy Documents Found" >> "$CONTEXT_FILE"
+                  find strategy -name "*.md" -type f 2>/dev/null | while read strategy_doc; do
+                    echo "- $strategy_doc" >> "$CONTEXT_FILE"
+                  done
+                  echo "" >> "$CONTEXT_FILE"
+                fi
               fi
               
               cd ..
             fi
           done
           
-          echo "Context gathered for ${{ inputs.project_name }}"
-          echo "Context file size: $(wc -l < $CONTEXT_FILE) lines"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "======================================" >> "$CONTEXT_FILE"
+          echo "" >> "$CONTEXT_FILE"
+          echo "## Summary Statistics" >> "$CONTEXT_FILE"
+          echo "- Repositories analyzed: $REPO_COUNT" >> "$CONTEXT_FILE"
+          echo "- Total commits: $TOTAL_COMMITS" >> "$CONTEXT_FILE"
+          echo "- Total issues: $TOTAL_ISSUES" >> "$CONTEXT_FILE"
+          echo "- Total PRs: $TOTAL_PRS" >> "$CONTEXT_FILE"
+          echo "" >> "$CONTEXT_FILE"
           
-      - name: Run AI Weekly Summary
-        id: ai_summary
-        uses: actions/ai-inference@v1
-        with:
-          model: 'gpt-4o'
-          prompt-file: 'prompts/weekly.md'
-          input: |
-            project_name: ${{ inputs.project_name }}
-            working_dir: ${{ github.workspace }}/projects
-            
-            Project data has been gathered and is available in the working directory.
-            Each repository has been cloned with full context including:
-            - Recent commits from the last 7 days
-            - Issues opened and closed in the last 7 days  
-            - Pull requests opened and merged in the last 7 days
-            
-            Full details are in: ${{ github.workspace }}/project_context.txt
-            
-            You have access to:
-            - gh CLI tool for querying GitHub data
-            - All cloned repositories in the projects/ directory
-            - The project_context.txt file with pre-gathered data
+          echo "Context gathered for ${{ inputs.project_name }}"
+          echo "- Repositories: $REPO_COUNT"
+          echo "- Commits: $TOTAL_COMMITS"
+          echo "- Issues: $TOTAL_ISSUES"
+          echo "- PRs: $TOTAL_PRS"
+          echo "- Context file size: $(wc -l < $CONTEXT_FILE) lines"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Save AI summary to file
+      - name: Generate AI summary with GPT-4
+        id: ai_summary
         run: |
           # Get current year and week number
           YEAR=$(date +%Y)
@@ -199,21 +266,58 @@ jobs:
           
           # Create updates directory structure
           mkdir -p updates/${YEAR}
+          OUTPUT_FILE="updates/${YEAR}/${WEEK}.md"
           
-          # Save the AI response to the weekly report using cat with heredoc
-          cat > updates/${YEAR}/${WEEK}.md << 'EOFREPORT'
-          ${{ steps.ai_summary.outputs.response }}
-          EOFREPORT
+          echo "Generating summary using ${{ inputs.model }}..."
           
-          echo "Report created: updates/${YEAR}/${WEEK}.md"
+          # Determine API configuration
+          if [ -n "${{ secrets.OPENAI_API_KEY }}" ]; then
+            export OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}"
+            echo "Using OpenAI API with custom key"
+          else
+            # Use GitHub Models (via Azure OpenAI)
+            export OPENAI_API_KEY="${{ secrets.GITHUB_TOKEN }}"
+            export OPENAI_BASE_URL="https://models.inference.ai.azure.com"
+            echo "Using GitHub Models"
+          fi
           
-          # Also save to job summary for easy viewing
-          cat updates/${YEAR}/${WEEK}.md >> $GITHUB_STEP_SUMMARY
+          export MODEL="${{ inputs.model }}"
+          
+          # Run the Python script to generate summary
+          python3 scripts/generate_summary.py \
+            project_context.txt \
+            prompts/weekly.md \
+            "$OUTPUT_FILE" \
+            "$MODEL"
+          
+          echo "Report created: $OUTPUT_FILE"
+          echo "Report size: $(wc -l < $OUTPUT_FILE) lines"
+          
+          # Save to job summary for easy viewing
+          echo "## Weekly Project Summary Generated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Project:** ${{ inputs.project_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Model:** ${{ inputs.model }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Week:** $WEEK, $YEAR" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat "$OUTPUT_FILE" >> $GITHUB_STEP_SUMMARY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Upload summary
+      - name: Upload summary artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: weekly-summary-${{ inputs.project_name }}
           path: updates/**/*.md
+          if-no-files-found: warn
+      
+      - name: Upload context data
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-context-${{ inputs.project_name }}
+          path: project_context.txt
           if-no-files-found: warn
