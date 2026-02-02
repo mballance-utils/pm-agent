@@ -60,6 +60,7 @@ jobs:
   generate-summary:
     runs-on: ubuntu-latest
     permissions:
+      models: read
       contents: write
       pull-requests: read
       issues: read
